@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-# pylint: disable=R0904
+# pylint: disable=R0904,C0103,W0142
 """
 zotero.py
 
 Created by Stephan Hügel on 2011-02-28
-Copyright Stephan Hügel
+Copyright Stephan Hügel, 2011-2015
+Copyright Rasmus S. Sorensen, 2015
 
 This file is part of Pyzotero.
 
@@ -23,7 +24,7 @@ along with Pyzotero. If not, see <http://www.gnu.org/licenses/>.
 
 """
 
-from __future__ import unicode_literals
+from __future__ import unicode_literals, absolute_import
 
 __author__ = u'Stephan Hügel'
 __version__ = '1.1.4'
@@ -52,6 +53,9 @@ import datetime
 import re
 import pytz
 import mimetypes
+import logging
+logger = logging.getLogger(__name__)
+
 
 try:
     from collections import OrderedDict
@@ -80,6 +84,8 @@ def ib64_patched(self, attrsD, contentparams):
     if self.contentparams['type'].endswith('/json'):
         return 0
     return 0
+# Override feedparser's buggy isBase64 method until they fix it
+feedparser._FeedParserMixin._isBase64 = ib64_patched
 
 
 def token():
@@ -89,12 +95,9 @@ def token():
 
 
 
-# Override feedparser's buggy isBase64 method until they fix it
-feedparser._FeedParserMixin._isBase64 = ib64_patched
-
-
 def cleanwrap(func):
     """ Wrapper for Zotero._cleanup
+    TODO: This wrapper seems unneccesary. Re-write Zotero._cleanup instead.
     """
     def enc(self, *args):
         """ Send each item to _cleanup() """
@@ -105,7 +108,7 @@ def cleanwrap(func):
 def retrieve(func):
     """
     Decorator for Zotero read API methods; calls _retrieve_data() and passes
-    the result to the correct processor, based on a lookup
+    the result to the correct processor, based on a lookup.
     """
     def wrapped_f(self, *args, **kwargs):
         """
@@ -168,6 +171,8 @@ class Zotero(object):
             raise ze.MissingCredentials(
                 'Please provide both the library ID and the library type')
         # api_key is not required for public individual or group libraries
+        # TODO: However, it should be defined, otherwise you might get
+        # AttributeErrors when asking for self.api_key...
         if api_key:
             self.api_key = api_key
         self.preserve_json_order = preserve_json_order
@@ -210,6 +215,8 @@ class Zotero(object):
             'image/tiff',
             'application/postscript',
             'application/rtf']
+        logger.debug("Zotero client initialized with library_type/library_id: \%s/%s and API key length: %s",
+                     library_type, library_id, len(api_key) if api_key else api_key)
 
     def default_headers(self):
         """
@@ -238,9 +245,9 @@ class Zotero(object):
     @cleanwrap
     def _cleanup(self, to_clean):
         """ Remove keys we added for internal use
+        TODO: Remove dependence on @cleanwrap.
         """
-        return dict([[k, v] for k, v in list(to_clean.items())
-                    if k not in self.temp_keys])
+        return {k: v for k, v in to_clean.items() if k not in self.temp_keys}
 
     def _retrieve_data(self, request=None):
         """
@@ -293,7 +300,7 @@ class Zotero(object):
         """
         # If the template is more than an hour old, try a 304
         if abs(datetime.datetime.utcnow().replace(tzinfo=pytz.timezone('GMT'))
-                - self.templates[template]['updated']).seconds > 3600:
+               - self.templates[template]['updated']).seconds > 3600:
             query = self.endpoint + url.format(
                 u=self.library_id,
                 t=self.library_type,
@@ -633,10 +640,9 @@ class Zotero(object):
         query_string = '/items/new?itemType={i}'.format(
             i=itemtype)
         if self.templates.get(template_name) and not \
-                self._updated(
-                    query_string,
-                    self.templates[template_name],
-                    template_name):
+                self._updated(query_string,
+                              self.templates[template_name],
+                              template_name):
             return copy.deepcopy(self.templates[template_name]['tmplt'])
         # otherwise perform a normal request and cache the response
         retrieved = self._retrieve_data(query_string)
@@ -658,11 +664,15 @@ class Zotero(object):
         accepts a list of one or more attachment template dicts
         and an optional parent Item ID. If this is specified,
         attachments are created under this ID
+        TODO: Add logging messages.
+        TODO: Split out each function so they can be used outside.
         """
         def verify(files):
             """
             ensure that all files to be attached exist
             open()'s better than exists(), cos it avoids a race condition
+            (Uhm, no, not when you close it again. But it does make sure the files
+            are readable and not e.g. locked.)
             """
             for templt in files:
                 if os.path.isfile(templt[u'filename']):
@@ -679,6 +689,7 @@ class Zotero(object):
                     raise ze.FileDoesNotExist(
                         "The file at %s couldn't be opened or found." %
                         templt[u'filename'])
+            logger.info("Payload/files %s verified.")
 
         def create_prelim(payload, parentid=None):
             """
@@ -697,7 +708,8 @@ class Zotero(object):
                 for child in payload:
                     child['parentItem'] = parentid
             to_send = json.dumps(payload)
-            req = requests.post(
+            # This is a Response object, not a Request. So use r or res.
+            res = requests.post(
                 url=self.endpoint
                 + liblevel.format(
                     t=self.library_type,
@@ -705,10 +717,11 @@ class Zotero(object):
                 data=to_send,
                 headers=headers)
             try:
-                req.raise_for_status()
+                res.raise_for_status()
             except requests.exceptions.HTTPError:
-                error_handler(req)
-            data = req.json()
+                error_handler(res)
+            logger.info("%s from new (attachment) items request with data %s.", res, to_send)
+            data = res.json()
             return data
 
         def get_auth(attachment, reg_key):
@@ -733,7 +746,9 @@ class Zotero(object):
                 'contentType': mtypes[0] or 'application/octet-stream',
                 'charset': mtypes[1]
             }
-            auth_req = requests.post(
+            logger.info("Requesting file upload authorization for item %s with data %s.",
+                        reg_key, data)
+            auth_res = requests.post(
                 url=self.endpoint
                 + '/users/{u}/items/{i}/file'.format(
                     u=self.library_id,
@@ -741,10 +756,12 @@ class Zotero(object):
                 data=data,
                 headers=auth_headers)
             try:
-                auth_req.raise_for_status()
+                auth_res.raise_for_status()
             except requests.exceptions.HTTPError:
-                error_handler(auth_req)
-            return auth_req.json()
+                error_handler(auth_res)
+            logger.info("%s from file upload authorization request for item %s returned:\n%s",
+                        auth_res, reg_key, auth_res.text)
+            return auth_res.json()
 
         def uploadfile(authdata, reg_key):
             """
@@ -754,13 +771,21 @@ class Zotero(object):
             reg_key isn't used, but we need to pass it through to Step 3
             """
             upload_file = bytearray(authdata['prefix'].encode())
-            upload_file.extend(open(attach, 'r').read()),
+            # Make sure to open in binary mode. Also, 'attach' is not strictly defined here,
+            # but inferred implicitly.
+            # TODO: Make attach variable explicit.
+            filebytes = open(attach, 'rb').read()
+            upload_file.extend(filebytes)
             upload_file.extend(authdata['suffix'].encode())
-            # Requests chokes on bytearrays, so convert to str
+            # Requests chokes on bytearrays, so convert to str.
+            # TODO: Check that this is still true for requests.
+            # (And that this is in fact the correct way to upload files with requests and Zotero API)
             upload_dict = {
                 'file': (
                     os.path.basename(attach),
                     str(upload_file))}
+            logger.info("Uploading file %s to %s (%s bytes)",
+                        attach, authdata['url'], len(upload_file))
             upload = requests.post(
                 url=authdata['url'],
                 files=upload_dict,
@@ -772,6 +797,8 @@ class Zotero(object):
             except requests.exceptions.HTTPError:
                 error_handler(upload)
             # now check the responses
+            logger.info("%s from file upload request to %s of file %s: %s",
+                        upload, authdata['url'], attach, upload.content)
             return register_upload(authdata, reg_key)
 
         def register_upload(authdata, reg_key):
@@ -787,6 +814,7 @@ class Zotero(object):
             reg_data = {
                 'upload': authdata.get('uploadKey')
             }
+            logger.info("Registering upload of item %s with authdata %s", reg_key, authdata)
             upload_reg = requests.post(
                 url=self.endpoint
                 + '/users/{u}/items/{i}/file'.format(
@@ -798,20 +826,45 @@ class Zotero(object):
                 upload_reg.raise_for_status()
             except requests.exceptions.HTTPError:
                 error_handler(upload_reg)
+            logger.info("%s from upload registration request of attachment item %s: %s",
+                        upload_reg, reg_key, upload_reg.content)
 
         # TODO: The flow needs to be a bit clearer
+        # Current flow:
+        # create_prelim:
+        #  -- Check/verify that the files are readable.
+        #  -- Create preliminary "attachment" items.
+        # For each successfully registered item:
+        #   get_auth(filename, key)
+        #    -- post md5, filename, mtime, etc to '/users/{u}/items/{i}/file' and return parsed json.
+        #   uploadfile(authdata, reg_key)
+        #    -- Uploads file content with post to url in authdata.
+        #    -- Calls register_upload(authdata, reg_key)
         created = create_prelim(payload, parentid)
+        logger.info("Preliminary attachment item created: %s", created)
         registered_idx = [int(k) for k in created['success'].keys()]
+        registered_keys = list(created['success'].values())
+        logger.info("Succesfully registered indices and keys: %s and %s",
+                    registered_idx, registered_keys)
         if registered_idx:
             # only upload and register authorised files
-            registered_keys = created['success'].values()
+            # Uh, potential sporadic bug: .values() is not guaranteed to return the list in correct order.
+            # I.e. registered_keys[r_idx] may not correspond to the correct key.
+            # Also, python3 bug: dict_values object does not support indexing!
             for r_idx, r_content in enumerate(registered_idx):
                 attach = payload[r_content]['filename']
                 authdata = get_auth(attach, registered_keys[r_idx])
                 # no need to keep going if the file exists
-                if authdata == {'exists: 1'}:
-                    continue
-                uploadfile(authdata, registered_keys[r_idx])
+                if authdata == {"exists": 1}:
+                    logger.info("File '%s' already exists on server.", attach)
+                else:
+                    logger.info("Received upload auth for file '%s', uploading and registering file for item %s.",
+                                attach, registered_keys[r_idx])
+                    logger.info("Authdata has keys: %s", authdata.keys())
+                    uploadfile(authdata, registered_keys[r_idx])
+        else:
+            # TODO: Complain about failed registrations.
+            logger.warning("No successfull preliminary attachment items created: %s", created)
         return created
 
     def add_tags(self, item, *tags):
@@ -840,10 +893,9 @@ class Zotero(object):
         """
         # check for a valid cached version
         if self.templates.get('item_fields') and not \
-                self._updated(
-                    '/itemFields',
-                    self.templates['item_fields'],
-                    'item_fields'):
+                self._updated('/itemFields',
+                              self.templates['item_fields'],
+                              'item_fields'):
             template = set(
                 t['field'] for t in self.templates['item_fields']['tmplt'])
         else:
@@ -870,8 +922,8 @@ class Zotero(object):
             difference = to_check.difference(template)
             if difference:
                 raise ze.InvalidItemFields(
-                    "Invalid keys present in item %s: %s" % (pos + 1,
-                    ' '.join(i for i in difference)))
+                    "Invalid keys present in item %s: %s" % \
+                    (pos + 1, ' '.join(i for i in difference)))
         return [i['data'] for i in items]
 
     def item_types(self):
@@ -879,30 +931,28 @@ class Zotero(object):
         """
         # Check for a valid cached version
         if self.templates.get('item_types') and not \
-                self._updated(
-                    '/itemTypes',
-                    self.templates['item_types'],
-                    'item_types'):
+                self._updated('/itemTypes',
+                              self.templates['item_types'],
+                              'item_types'):
             return self.templates['item_types']['tmplt']
         query_string = '/itemTypes'
         # otherwise perform a normal request and cache the response
         retrieved = self._retrieve_data(query_string)
-        return self._cache(json.loads(retrieved), 'item_types')
+        return self._cache(retrieved, 'item_types') # Fixed: _retrieve_data already returns parsed json object.
 
     def creator_fields(self):
         """ Get localised creator fields
         """
         # Check for a valid cached version
         if self.templates.get('creator_fields') and not \
-                self._updated(
-                    '/creatorFields',
-                    self.templates['creator_fields'],
-                    'creator_fields'):
+                self._updated('/creatorFields',
+                              self.templates['creator_fields'],
+                              'creator_fields'):
             return self.templates['creator_fields']['tmplt']
         query_string = '/creatorFields'
         # otherwise perform a normal request and cache the response
         retrieved = self._retrieve_data(query_string)
-        return self._cache(json.loads(retrieved), 'creator_fields')
+        return self._cache(retrieved, 'creator_fields')
 
     def item_type_fields(self, itemtype):
         """ Get all valid fields for an item
@@ -911,25 +961,23 @@ class Zotero(object):
         template_name = 'item_type_fields_' + itemtype
         query_string = '/itemTypeFields?itemType={i}'.format(
             i=itemtype)
-        if self.templates.get(template_name) and not \
-                self._updated(
-                    query_string,
-                    self.templates[template_name],
-                    template_name):
+        if self.templates.get(template_name) and \
+            not self._updated(query_string,
+                              self.templates[template_name],
+                              template_name):
             return self.templates[template_name]['tmplt']
         # otherwise perform a normal request and cache the response
         retrieved = self._retrieve_data(query_string)
-        return self._cache(json.loads(retrieved), template_name)
+        return self._cache(retrieved, template_name)
 
     def item_fields(self):
         """ Get all available item fields
         """
         # Check for a valid cached version
         if self.templates.get('item_fields') and not \
-                self._updated(
-                    '/itemFields',
-                    self.templates['item_fields'],
-                    'item_fields'):
+                self._updated('/itemFields',
+                              self.templates['item_fields'],
+                              'item_fields'):
             return self.templates['item_fields']['tmplt']
         query_string = '/itemFields'
         # otherwise perform a normal request and cache the response
@@ -944,14 +992,13 @@ class Zotero(object):
         query_string = '/itemTypeCreatorTypes?itemType={i}'.format(
             i=itemtype)
         if self.templates.get(template_name) and not \
-                self._updated(
-                    query_string,
-                    self.templates[template_name],
-                    template_name):
+                self._updated(query_string,
+                              self.templates[template_name],
+                              template_name):
             return self.templates[template_name]['tmplt']
         # otherwise perform a normal request and cache the response
         retrieved = self._retrieve_data(query_string)
-        return self._cache(json.loads(retrieved), template_name)
+        return self._cache(retrieved, template_name)
 
     def create_items(self, payload):
         """
@@ -1036,39 +1083,46 @@ class Zotero(object):
             error_handler(req)
         return True
 
-    def attachment_simple(self, files, parentid=None):
+    def attachment_simple(self, files, parentid=None, titles=None):
         """
-        Add attachments using filenames as title
+        Add attachments.
         Arguments:
-        One or more file paths to add as attachments:
-        An optional Item ID, which will create child attachments
+        <files> is a list of file paths to add as attachments.
+        If <parentid> is given, then the files are attached as child items
+        to the given parent item.
+        <titles> is a list of title/file names for each file.
+        If <titles> is not given, then the file's basename is used as title.
+        TODO: Support for other attachment linkModes, especially linked_file.
+        Zotero linkModes: imported_file,imported_url,linked_file,linked_url
         """
         orig = self._attachment_template('imported_file')
         to_add = [orig.copy() for fls in files]
         for idx, tmplt in enumerate(to_add):
-            tmplt['title'] = os.path.basename(files[idx])
+            tmplt['title'] = titles[idx] if titles else os.path.basename(files[idx])
             tmplt['filename'] = files[idx]
-        if parentid:
-            return self._attachment(to_add, parentid)
-        else:
-            return self._attachment(to_add)
+        logger.info("Uploading attachments: %s", to_add)
+        return self._attachment(to_add, parentid)
 
-    def attachment_both(self, files, parentid=None):
-        """
-        Add child attachments using title, filename
-        Arguments:
-        One or more lists or tuples containing title, file path
-        An optional Item ID, which will create child attachments
-        """
-        orig = self._attachment_template('imported_file')
-        to_add = [orig.copy() for f in files]
-        for idx, tmplt in enumerate(to_add):
-            tmplt['title'] = files[idx][0]
-            tmplt['filename'] = files[idx][1]
-        if parentid:
-            return self._attachment(to_add, parentid)
-        else:
-            return self._attachment(to_add)
+    # Removed; Having two nearly identical functions is not a good idea.
+    # Instead of attachment_both(files), use
+    # >>> files, titles = zip(*files)
+    # >>> attachment_simple(files, parentid, titles)
+    #def attachment_both(self, files, parentid=None):
+    #    """
+    #    Add child attachments using title, filename
+    #    Arguments:
+    #    One or more lists or tuples containing title, file path
+    #    An optional Item ID, which will create child attachments
+    #    """
+    #    orig = self._attachment_template('imported_file')
+    #    to_add = [orig.copy() for f in files]
+    #    for idx, tmplt in enumerate(to_add):
+    #        tmplt['title'] = files[idx][0]
+    #        tmplt['filename'] = files[idx][1]
+    #    if parentid:
+    #        return self._attachment(to_add, parentid)
+    #    else:
+    #        return self._attachment(to_add)
 
     def update_item(self, payload):
         """
@@ -1153,11 +1207,14 @@ class Zotero(object):
         Accepts a single argument:
             a dict containing item data
             OR a list of dicts containing item data
+        TODO: Make this accept a key or list of keys, or make alternate method for that.
+        (I expected this to work like Zotero.item(key) method)
         """
         params = None
         if isinstance(payload, list):
             params = {'itemKey': ','.join([p['key'] for p in payload])}
             modified = payload[0]['version']
+            # TODO: NOT ALL ITEMS HAS THE SAME VERSION.
             url = self.endpoint + \
             '/{t}/{u}/items'.format(
                 t=self.library_type,
@@ -1285,3 +1342,15 @@ responses after 62 seconds. You are being rate-limited, try again later")
             raise error_codes.get(req.status_code)(err_msg(req))
     else:
         raise ze.HTTPError(err_msg(req))
+
+
+if __name__ == '__main__':
+    # Simple example on how to activate logging system:
+    # logging.basicConfig()
+    # Enable logging with customized output:
+    production = False
+    loguserfmt = "%(asctime)s %(levelname)-5s %(name)20s:%(lineno)-4s%(funcName)20s() %(message)s"
+    logtimefmt = "%Y%m%d-%H:%M:%S" if production else "%H:%M:%S"
+    logging.basicConfig(level=logging.WARNING if production else logging.DEBUG,
+                        format=loguserfmt,
+                        datefmt=logtimefmt)

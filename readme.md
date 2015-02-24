@@ -1,6 +1,6 @@
 [![Build Status](https://travis-ci.org/urschrei/pyzotero.png?branch=dev)](https://travis-ci.org/urschrei/pyzotero) [![Wheel Status](https://pypip.in/wheel/Pyzotero/badge.svg?style=flat)](https://pypi.python.org/pypi/Pyzotero/) [![Supported Python versions](https://pypip.in/py_versions/Pyzotero/badge.svg?style=flat)](https://pypi.python.org/pypi/Pyzotero/)
 
-# THiS IS A FORK OF PYzOTERO #
+# THiS IS A FORK OF PYZOTERO #
 This is a fork of Stephan Hügel's pyzotero module, https://github.com/urschrei/pyzotero.
 
 The fork introduces the following non-breaking (internal) changes:
@@ -26,7 +26,7 @@ It is because of these breaking changes that I've decided to rename the reposito
     - For **group libraries**, the ID can be found by opening the group's page: `https://www.zotero.org/groups/groupname`, and hovering over the `group settings` link. The ID is the integer after `/groups/`.
 3. You'll also need<sup>†</sup> to get an **API key** [here][2].
 4. Are you accessing your own Zotero library? `library_type` is `user`.
-5. Are you accessing a shared group library? `library_type` is `group`.  
+5. Are you accessing a shared group library? `library_type` is `group`.
 
 Then:
 
@@ -45,7 +45,7 @@ Full documentation of available Pyzotero methods, code examples, and sample outp
 
 # Installation #
 * Using [pip][10]: `pip install pyzotero` (it's available as a wheel, and is tested on Python 2.7 and 3.4)
-* From a local clone, if you wish to install Pyzotero from a specific branch: 
+* From a local clone, if you wish to install Pyzotero from a specific branch:
 
 Example:
 
@@ -66,10 +66,10 @@ Pyzotero remains in development as of February 2015. The latest commits can be f
 
 ## Pull Requests ##
 
-Pull requests are welcomed. Please read the [contribution guidelines](CONTRIBUTING.md). 
+Pull requests are welcomed. Please read the [contribution guidelines](CONTRIBUTING.md).
 
 ## Versioning ##
-As of v1.0.0, Pyzotero is versioned according to [Semver](http://semver.org); version increments are performed as follows:  
+As of v1.0.0, Pyzotero is versioned according to [Semver](http://semver.org); version increments are performed as follows:
 
 
 
@@ -79,7 +79,7 @@ As of v1.0.0, Pyzotero is versioned according to [Semver](http://semver.org); ve
 
 # License #
 
-Pyzotero is licensed under version 3 of the [GNU General Public License][8]. See `license.txt` for details.  
+Pyzotero is licensed under version 3 of the [GNU General Public License][8]. See `license.txt` for details.
 
 [1]: https://www.zotero.org/support/dev/web_api/v3/start
 [2]: https://www.zotero.org/settings/keys/new
@@ -92,4 +92,3 @@ Pyzotero is licensed under version 3 of the [GNU General Public License][8]. See
 [9]: https://github.com/urschrei/pyzotero/tree/dev
 [10]: http://www.pip-installer.org/en/latest/index.html
 † This isn't strictly true: you only need an API key for personal libraries and non-public group libraries.
-

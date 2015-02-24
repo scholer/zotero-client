@@ -1,5 +1,23 @@
 [![Build Status](https://travis-ci.org/urschrei/pyzotero.png?branch=dev)](https://travis-ci.org/urschrei/pyzotero) [![Wheel Status](https://pypip.in/wheel/Pyzotero/badge.svg?style=flat)](https://pypi.python.org/pypi/Pyzotero/) [![Supported Python versions](https://pypip.in/py_versions/Pyzotero/badge.svg?style=flat)](https://pypi.python.org/pypi/Pyzotero/)
 
+# THiS IS A FORK OF PYzOTERO #
+This is a fork of Stephan Hügel's pyzotero module, https://github.com/urschrei/pyzotero.
+
+The fork introduces the following non-breaking (internal) changes:
+* Makes use of the logging standard lib to produce helpful debug messages.
+* Leaving the client state-less also means that the @retrieve wrapper and Zotero._retrieve_data method are no longer required.
+* Zotero._build_query(query_string) is no longer used to create build requests with add_parameters. Instead, the client just passes the endpoint to a wrapper function for the equivalent function in requests, e.g. POST requests are created by Zotero.post() and uses requests.post().
+* In general, the full potential of the requests module is used. This means, instead of the zotero client creating query strings and json bodies, the equivalent features of the requests module takes care of this. The Zotero client also has a persistent requests.Session object (instead of making a new one for every request).
+* A dozen of other, minor changes, mostly to suit my particular taste in coding style and nomenclature.
+
+
+More importantly, this fork makes a few breaking changes, which makes it incompatible with existing code:
+* Most importantly: All requests returns a response object and NOT the parsed JSON. The original pyzotero works as a "state machine": The state of a Zotero object changes depending on the last response. This is required to be able to do things such as follow links and other stuff that relies on meta/header data from the response. I prefer a workflow where the state of the client depends less on the last response. If I need to follow links from a response, I will use the response object to do so. (Which is why a complete response object is returned and not just the parsed json data.).
+
+It is because of these breaking changes that I've decided to rename the repository "Zotero-Client", instead of Stephan's original "pyzotero". Please recogize that most code was done by Stephan and other previous contributors to pyzotero.
+
+
+
 # Quickstart #
 
 1. `pip install pyzotero`

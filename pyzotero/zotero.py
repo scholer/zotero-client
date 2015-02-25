@@ -125,16 +125,16 @@ def retrieve(func):
         self.links = self._extract_links()
         # determine content and format, based on url params
         content = self.content.search(
-            self.request.url) and \
+            self.response.url) and \
             self.content.search(
-                self.request.url).group(0) or 'bib'
+                self.response.url).group(0) or 'bib'
        # JSON by default
         formats = {
             'application/atom+xml': 'atom',
             'application/json': 'json',
             'text/plain': 'plain',
             }
-        fmt = formats.get(self.request.headers['Content-Type'], 'json')
+        fmt = formats.get(self.response.headers['Content-Type'], 'json')
         # clear all query parameters
         self.url_params = None
         # Or process atom if it's atom-formatted
@@ -178,7 +178,7 @@ class Zotero(object):
         self.preserve_json_order = preserve_json_order
         self.url_params = None
         self.tag_data = False
-        self.request = None
+        self.response = None # It is a RESPONSE, not a Request object!
         # these aren't valid item fields, so never send them to the server
         self.temp_keys = set(['key', 'etag', 'group_id', 'updated'])
         # determine which processor to use for the parsed content
@@ -202,6 +202,7 @@ class Zotero(object):
             'json': self._json_processor,
         }
         self.links = None
+        self.session = requests.Session()
         self.templates = {}
         self.file_content_types = [
             'application/msword',
@@ -218,6 +219,7 @@ class Zotero(object):
         logger.debug("Zotero client initialized with library_type/library_id: \%s/%s and API key length: %s",
                      library_type, library_id, len(api_key) if api_key else api_key)
 
+    @property
     def default_headers(self):
         """
         It's always OK to include these headers
@@ -227,6 +229,41 @@ class Zotero(object):
             "Authorization": "Bearer %s" % self.api_key,
             "Zotero-API-Version": "%s" % __api_version__,
             }
+
+
+    def request(self, method, url, headers=None, **kwargs):
+        """ Make requests.request to url using method injecting default headers, etc. """
+        if headers is None:
+            headers = self.default_headers
+        else:
+            headers.update(self.default_headers)
+        logger.debug("Making %s request to %s using headers %s",
+                     method, url, headers.keys())
+        response = self.session.request(method, url, **kwargs)
+        logger.debug("%s from url %s with %s bytes", response, url, len(response.content))
+        return response
+
+    def get(self, url, headers=None, **kwargs):
+        """ Convenience method to request get method. """
+        kwargs.setdefault('allow_redirects', True)
+        return self.request('get', url, headers=headers, **kwargs)
+
+    def post(self, url, data=None, json=None, headers=None, **kwargs): # pylint: disable=W0621
+        """ Convenience method to request post method. """
+        return self.request('post', url, headers=headers, data=data, json=json, **kwargs)
+
+    def put(self, url, data=None, headers=None, **kwargs):
+        """ Convenience method to request put method. """
+        return self.request('put', url, headers=headers, data=data, **kwargs)
+
+    def patch(self, url, data=None, headers=None, **kwargs):
+        """ Convenience method to request patch method. """
+        return self.request('patch', url, headers=headers, data=data, **kwargs)
+
+    def delete(self, url, headers=None, **kwargs):
+        """ Convenience method to request patch method. """
+        return self.request('patch', url, headers=headers, **kwargs)
+
 
     def _cache(self, template, key):
         """
@@ -242,12 +279,14 @@ class Zotero(object):
             'updated': thetime}
         return copy.deepcopy(template)
 
-    @cleanwrap
     def _cleanup(self, to_clean):
         """ Remove keys we added for internal use
-        TODO: Remove dependence on @cleanwrap.
         """
-        return {k: v for k, v in to_clean.items() if k not in self.temp_keys}
+        if isinstance(to_clean, list):
+            return [self._cleanup(elem) for elem in to_clean]
+        else:
+            # Assume dict (if not, an AttributeError is a suitable error)
+            return {k: v for k, v in to_clean.items() if k not in self.temp_keys}
 
     def _retrieve_data(self, request=None):
         """
@@ -256,20 +295,16 @@ class Zotero(object):
         Returns a JSON document
         """
         full_url = '%s%s' % (self.endpoint, request)
-        self.request = requests.get(
-            url=full_url,
-            headers=self.default_headers())
-        try:
-            self.request.raise_for_status()
-        except requests.exceptions.HTTPError:
-            error_handler(self.request)
-        content_type = self.request.headers['Content-Type'].lower()
+        self.response = self.get(full_url)
+        if not self.response.ok:
+            error_handler(self.response)
+        content_type = self.response.headers['Content-Type'].lower()
         if content_type == 'application/json':
-            return self.request.json()
+            return self.response.json()
         elif content_type in self.file_content_types:
-            return self.request.content
+            return self.response.content
         else:
-            return self.request.text
+            return self.response.text
 
     def _extract_links(self):
         """
@@ -277,7 +312,7 @@ class Zotero(object):
         """
         extracted = dict()
         try:
-            for key, value in self.request.links.items():
+            for key, value in self.response.links.items():
                 parsed = urlparse(value['url'])
                 fragment = "{path}?{query}".format(
                     path=parsed[2],
@@ -290,13 +325,14 @@ class Zotero(object):
 
     def _updated(self, url, payload, template=None):
         """
-        Generic call to see if a template request returns 304
-        accepts:
-        - a string to combine with the API endpoint
-        - a dict of format values, in case they're required by 'url'
-        - a template name to check for
+        Generic call to see if a template request returns 304 (Not Modified).
+        Arguments:
+        - <url>: a string to combine with the API endpoint.
+                 (Yes, this would be the relative uri path or resource)
+        - <payload>: a dict of format values, in case they're required by 'url'.
+        - <template>: a template name to check for.
         As per the API docs, a template less than 1 hour old is
-        assumed to be fresh, and will immediately return False if found
+        assumed to be fresh, and will immediately return False if found.
         """
         # If the template is more than an hour old, try a 304
         if abs(datetime.datetime.utcnow().replace(tzinfo=pytz.timezone('GMT'))
@@ -308,14 +344,12 @@ class Zotero(object):
             headers = {
                 'If-Modified-Since':
                     payload['updated'].strftime("%a, %d %b %Y %H:%M:%S %Z")}
-            headers.update(self.default_headers())
+            #headers.update(self.default_headers)
             # perform the request, and check whether the response returns 304
-            req = requests.get(query, headers=headers)
-            try:
-                req.raise_for_status()
-            except requests.exceptions.HTTPError:
-                error_handler(req)
-            return req.status_code == 304
+            r = self.get(query, headers=headers)
+            if not r.ok:
+                error_handler(r)
+            return r.status_code == 304
         # Still plenty of life left in't
         return False
 
@@ -387,7 +421,7 @@ class Zotero(object):
         data = self._retrieve_data(query)
         self.url_params = None
         # extract the 'total items' figure
-        return int(self.request.headers['Total-Results'])
+        return int(self.response.headers['Total-Results'])
 
     @retrieve
     def key_info(self, **kwargs):
@@ -410,7 +444,7 @@ class Zotero(object):
         """ Get the last modified version
         """
         self.items(**kwargs)
-        return int(self.request.headers.get('last-modified-version', 0))
+        return int(self.response.headers.get('last-modified-version', 0))
 
     @retrieve
     def top(self, **kwargs):
@@ -702,7 +736,7 @@ class Zotero(object):
                 'Zotero-Write-Token': token(),
                 'Content-Type': 'application/json',
             }
-            headers.update(self.default_headers())
+            headers.update(self.default_headers)
             # If we have a Parent ID, add it as a parentItem
             if parentid:
                 for child in payload:
@@ -716,9 +750,7 @@ class Zotero(object):
                     u=self.library_id,),
                 data=to_send,
                 headers=headers)
-            try:
-                res.raise_for_status()
-            except requests.exceptions.HTTPError:
+            if not res.ok:
                 error_handler(res)
             logger.info("%s from new (attachment) items request with data %s.", res, to_send)
             data = res.json()
@@ -737,7 +769,7 @@ class Zotero(object):
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'If-None-Match': '*',
             }
-            auth_headers.update(self.default_headers())
+            auth_headers.update(self.default_headers)
             data = {
                 'md5': digest.hexdigest(),
                 'filename': os.path.basename(attachment),
@@ -755,9 +787,7 @@ class Zotero(object):
                     i=reg_key),
                 data=data,
                 headers=auth_headers)
-            try:
-                auth_res.raise_for_status()
-            except requests.exceptions.HTTPError:
+            if not auth_res.ok:
                 error_handler(auth_res)
             logger.info("%s from file upload authorization request for item %s returned:\n%s",
                         auth_res, reg_key, auth_res.text)
@@ -792,9 +822,7 @@ class Zotero(object):
                 headers={
                     "Content-Type": authdata['contentType'],
                     'User-Agent': 'Pyzotero/%s' % __version__})
-            try:
-                upload.raise_for_status()
-            except requests.exceptions.HTTPError:
+            if not upload.ok:
                 error_handler(upload)
             # now check the responses
             logger.info("%s from file upload request to %s of file %s: %s",
@@ -810,7 +838,7 @@ class Zotero(object):
                 'If-None-Match': '*',
                 'User-Agent': 'Pyzotero/%s' % __version__
             }
-            reg_headers.update(self.default_headers())
+            reg_headers.update(self.default_headers)
             reg_data = {
                 'upload': authdata.get('uploadKey')
             }
@@ -822,9 +850,7 @@ class Zotero(object):
                     i=reg_key),
                 data=reg_data,
                 headers=dict(reg_headers))
-            try:
-                upload_reg.raise_for_status()
-            except requests.exceptions.HTTPError:
+            if not upload_reg.ok:
                 error_handler(upload_reg)
             logger.info("%s from upload registration request of attachment item %s: %s",
                         upload_reg, reg_key, upload_reg.content)
@@ -1014,19 +1040,17 @@ class Zotero(object):
             'Zotero-Write-Token': token(),
             'Content-Type': 'application/json',
         }
-        headers.update(self.default_headers())
-        req = requests.post(
+        headers.update(self.default_headers)
+        r = requests.post(
             url=self.endpoint
             + '/{t}/{u}/items'.format(
                 t=self.library_type,
                 u=self.library_id),
             data=to_send,
             headers=dict(headers))
-        try:
-            req.raise_for_status()
-        except requests.exceptions.HTTPError:
-            error_handler(req)
-        return req.json()
+        if not r.ok:
+            error_handler(r)
+        return r.json()
 
     def create_collection(self, payload):
         """
@@ -1047,19 +1071,17 @@ class Zotero(object):
         headers = {
             'Zotero-Write-Token': token(),
         }
-        headers.update(self.default_headers())
-        req = requests.post(
+        headers.update(self.default_headers)
+        r = requests.post(
             url=self.endpoint
             + '/{t}/{u}/collections'.format(
                 t=self.library_type,
                 u=self.library_id),
             headers=headers,
             data=json.dumps(payload))
-        try:
-            req.raise_for_status()
-        except requests.exceptions.HTTPError:
-            error_handler(req)
-        return req.text
+        if not r.ok:
+            error_handler(r)
+        return r.text
 
     def update_collection(self, payload):
         """
@@ -1070,17 +1092,15 @@ class Zotero(object):
         modified = payload['version']
         key = payload['key']
         headers = {'If-Unmodified-Since-Version': modified}
-        headers.update(self.default_headers())
-        req = requests.put(
+        headers.update(self.default_headers)
+        r = requests.put(
             url=self.endpoint
             + '/{t}/{u}/collections/{c}'.format(
                 t=self.library_type, u=self.library_id, c=key),
             headers=headers,
             payload=json.dumps(payload))
-        try:
-            req.raise_for_status()
-        except requests.exceptions.HTTPError:
-            error_handler(req)
+        if not r.ok:
+            error_handler(r)
         return True
 
     def attachment_simple(self, files, parentid=None, titles=None):
@@ -1133,8 +1153,8 @@ class Zotero(object):
         modified = payload['version']
         ident = payload['key']
         headers = {'If-Unmodified-Since-Version': modified}
-        headers.update(self.default_headers())
-        req = requests.put(
+        headers.update(self.default_headers)
+        r = requests.put(
             url=self.endpoint
             + '/{t}/{u}/items/{id}'.format(
                 t=self.library_type,
@@ -1142,10 +1162,8 @@ class Zotero(object):
                 id=ident),
             headers=headers,
             data=json.dumps(to_send))
-        try:
-            req.raise_for_status()
-        except requests.exceptions.HTTPError:
-            error_handler(req)
+        if not r.ok:
+            error_handler(r)
         return True
 
     def addto_collection(self, collection, payload):
@@ -1159,8 +1177,8 @@ class Zotero(object):
         # add the collection data from the item
         modified_collections = payload['data']['collections'] + list(collection)
         headers = {'If-Unmodified-Since-Version': modified}
-        headers.update(self.default_headers())
-        req = requests.patch(
+        headers.update(self.default_headers)
+        r = requests.patch(
             url=self.endpoint
             + '/{t}/{u}/items/{i}'.format(
                 t=self.library_type,
@@ -1168,10 +1186,8 @@ class Zotero(object):
                 i=ident),
             data=json.dumps({'collections': modified_collections}),
             headers=headers)
-        try:
-            req.raise_for_status()
-        except requests.exceptions.HTTPError:
-            error_handler(req)
+        if not r.ok:
+            error_handler(r)
         return True
 
     def deletefrom_collection(self, collection, payload):
@@ -1186,8 +1202,8 @@ class Zotero(object):
         modified_collections = [
             c for c in payload['data']['collections'] if c != collection]
         headers = {'If-Unmodified-Since-Version': modified}
-        headers.update(self.default_headers())
-        req = requests.patch(
+        headers.update(self.default_headers)
+        r = requests.patch(
             url=self.endpoint
             + '/{t}/{u}/items/{i}'.format(
                 t=self.library_type,
@@ -1195,10 +1211,8 @@ class Zotero(object):
                 i=ident),
             data=json.dumps({'collections': modified_collections}),
             headers=headers)
-        try:
-            req.raise_for_status()
-        except requests.exceptions.HTTPError:
-            error_handler(req)
+        if not r.ok:
+            error_handler(r)
         return True
 
     def delete_item(self, payload):
@@ -1228,16 +1242,14 @@ class Zotero(object):
                 u=self.library_id,
                 c=ident)
         headers = {'If-Unmodified-Since-Version': modified}
-        headers.update(self.default_headers())
-        req = requests.delete(
+        headers.update(self.default_headers)
+        r = requests.delete(
             url=url,
             params=params,
             headers=headers
         )
-        try:
-            req.raise_for_status()
-        except requests.exceptions.HTTPError:
-            error_handler(req)
+        if not r.ok:
+            error_handler(r)
         return True
 
     def delete_collection(self, payload):
@@ -1264,16 +1276,13 @@ class Zotero(object):
                 u=self.library_id,
                 c=ident)
         headers = {'If-Unmodified-Since-Version': modified}
-        headers.update(self.default_headers())
-        req = requests.delete(
+        headers.update(self.default_headers)
+        r = requests.delete(
             url=url,
             params=params,
             headers=headers)
-
-        try:
-            req.raise_for_status()
-        except requests.exceptions.HTTPError:
-            error_handler(req)
+        if not r.ok:
+            error_handler(r)
         return True
 
 
@@ -1297,7 +1306,9 @@ backoff = Backoff()
 
 
 def error_handler(req):
-    """ Error handler for HTTP requests
+    """
+    Error handler for HTTP requests.
+    Handles "back off" responses etc.
     """
     error_codes = {
         400: ze.UnsupportedParams,
@@ -1334,9 +1345,7 @@ responses after 62 seconds. You are being rate-limited, try again later")
             time.sleep(delay)
             sess = requests.Session()
             new_req = sess.send(req.request)
-            try:
-                new_req.raise_for_status()
-            except requests.exceptions.HTTPError:
+            if not new_req.ok:
                 error_handler(new_req)
         else:
             raise error_codes.get(req.status_code)(err_msg(req))

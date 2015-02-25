@@ -938,7 +938,7 @@ class Zotero(object):
             'relations'])
         template = template | set(self.temp_keys)
         for pos, item in enumerate(items):
-            to_check = set(i for i in list(item['data'].keys()))
+            to_check = set(i for i in item['data'].keys())
             difference = to_check.difference(template)
             if difference:
                 raise ze.InvalidItemFields(
@@ -1029,7 +1029,7 @@ class Zotero(object):
             raise ze.TooManyItems(
                 "You may only create up to 50 items per call")
         # TODO: strip extra data if it's an existing item
-        to_send = json.dumps([i for i in self._cleanup(*payload)])
+        cleaned = self._cleanup(payload)
         headers = {
             'Zotero-Write-Token': token(),
             'Content-Type': 'application/json',
@@ -1039,7 +1039,7 @@ class Zotero(object):
             + '/{t}/{u}/items'.format(
                 t=self.library_type,
                 u=self.library_id),
-            data=to_send,
+            json=cleaned,
             headers=headers)
         if not r.ok:
             error_handler(r)
@@ -1070,7 +1070,7 @@ class Zotero(object):
                 t=self.library_type,
                 u=self.library_id),
             headers=headers,
-            data=json.dumps(payload))
+            json=payload)
         if not r.ok:
             error_handler(r)
         return r.text
@@ -1130,7 +1130,7 @@ class Zotero(object):
                 u=self.library_id,
                 id=ident),
             headers=headers,
-            data=json.dumps(to_send))
+            json=to_send)
         if not r.ok:
             error_handler(r)
         return True
@@ -1152,7 +1152,7 @@ class Zotero(object):
                 t=self.library_type,
                 u=self.library_id,
                 i=ident),
-            data=json.dumps({'collections': modified_collections}),
+            json={'collections': modified_collections},
             headers=headers)
         if not r.ok:
             error_handler(r)
@@ -1176,7 +1176,7 @@ class Zotero(object):
                 t=self.library_type,
                 u=self.library_id,
                 i=ident),
-            data=json.dumps({'collections': modified_collections}),
+            json={'collections': modified_collections},
             headers=headers)
         if not r.ok:
             error_handler(r)

@@ -344,7 +344,6 @@ class Zotero(object):
             headers = {
                 'If-Modified-Since':
                     payload['updated'].strftime("%a, %d %b %Y %H:%M:%S %Z")}
-            #headers.update(self.default_headers)
             # perform the request, and check whether the response returns 304
             r = self.get(query, headers=headers)
             if not r.ok:
@@ -736,24 +735,20 @@ class Zotero(object):
                 'Zotero-Write-Token': token(),
                 'Content-Type': 'application/json',
             }
-            headers.update(self.default_headers)
             # If we have a Parent ID, add it as a parentItem
             if parentid:
                 for child in payload:
                     child['parentItem'] = parentid
-            to_send = json.dumps(payload)
             # This is a Response object, not a Request. So use r or res.
-            res = requests.post(
-                url=self.endpoint
-                + liblevel.format(
-                    t=self.library_type,
-                    u=self.library_id,),
-                data=to_send,
-                headers=headers)
-            if not res.ok:
+            r = self.post(url=self.endpoint
+                            + liblevel.format(t=self.library_type,
+                                              u=self.library_id,),
+                            json=payload,
+                            headers=headers)
+            if not r.ok:
                 error_handler(res)
-            logger.info("%s from new (attachment) items request with data %s.", res, to_send)
-            data = res.json()
+            logger.info("%s from new (attachment) items request with data %s.", r, payload)
+            data = r.json()
             return data
 
         def get_auth(attachment, reg_key):
@@ -769,7 +764,6 @@ class Zotero(object):
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'If-None-Match': '*',
             }
-            auth_headers.update(self.default_headers)
             data = {
                 'md5': digest.hexdigest(),
                 'filename': os.path.basename(attachment),
@@ -780,7 +774,7 @@ class Zotero(object):
             }
             logger.info("Requesting file upload authorization for item %s with data %s.",
                         reg_key, data)
-            auth_res = requests.post(
+            auth_res = self.post(
                 url=self.endpoint
                 + '/users/{u}/items/{i}/file'.format(
                     u=self.library_id,
@@ -816,7 +810,8 @@ class Zotero(object):
                     str(upload_file))}
             logger.info("Uploading file %s to %s (%s bytes)",
                         attach, authdata['url'], len(upload_file))
-            upload = requests.post(
+            # TODO: Check that this can be done by self.post, i.e. with default_headers?
+            upload = self.post(
                 url=authdata['url'],
                 files=upload_dict,
                 headers={
@@ -838,12 +833,11 @@ class Zotero(object):
                 'If-None-Match': '*',
                 'User-Agent': 'Pyzotero/%s' % __version__
             }
-            reg_headers.update(self.default_headers)
             reg_data = {
                 'upload': authdata.get('uploadKey')
             }
             logger.info("Registering upload of item %s with authdata %s", reg_key, authdata)
-            upload_reg = requests.post(
+            upload_reg = self.post(
                 url=self.endpoint
                 + '/users/{u}/items/{i}/file'.format(
                     u=self.library_id,
@@ -1040,14 +1034,13 @@ class Zotero(object):
             'Zotero-Write-Token': token(),
             'Content-Type': 'application/json',
         }
-        headers.update(self.default_headers)
-        r = requests.post(
+        r = self.post(
             url=self.endpoint
             + '/{t}/{u}/items'.format(
                 t=self.library_type,
                 u=self.library_id),
             data=to_send,
-            headers=dict(headers))
+            headers=headers)
         if not r.ok:
             error_handler(r)
         return r.json()
@@ -1071,8 +1064,7 @@ class Zotero(object):
         headers = {
             'Zotero-Write-Token': token(),
         }
-        headers.update(self.default_headers)
-        r = requests.post(
+        r = self.post(
             url=self.endpoint
             + '/{t}/{u}/collections'.format(
                 t=self.library_type,
@@ -1092,8 +1084,7 @@ class Zotero(object):
         modified = payload['version']
         key = payload['key']
         headers = {'If-Unmodified-Since-Version': modified}
-        headers.update(self.default_headers)
-        r = requests.put(
+        r = self.put(
             url=self.endpoint
             + '/{t}/{u}/collections/{c}'.format(
                 t=self.library_type, u=self.library_id, c=key),
@@ -1153,8 +1144,7 @@ class Zotero(object):
         modified = payload['version']
         ident = payload['key']
         headers = {'If-Unmodified-Since-Version': modified}
-        headers.update(self.default_headers)
-        r = requests.put(
+        r = self.put(
             url=self.endpoint
             + '/{t}/{u}/items/{id}'.format(
                 t=self.library_type,
@@ -1177,8 +1167,7 @@ class Zotero(object):
         # add the collection data from the item
         modified_collections = payload['data']['collections'] + list(collection)
         headers = {'If-Unmodified-Since-Version': modified}
-        headers.update(self.default_headers)
-        r = requests.patch(
+        r = self.patch(
             url=self.endpoint
             + '/{t}/{u}/items/{i}'.format(
                 t=self.library_type,
@@ -1202,8 +1191,7 @@ class Zotero(object):
         modified_collections = [
             c for c in payload['data']['collections'] if c != collection]
         headers = {'If-Unmodified-Since-Version': modified}
-        headers.update(self.default_headers)
-        r = requests.patch(
+        r = self.patch(
             url=self.endpoint
             + '/{t}/{u}/items/{i}'.format(
                 t=self.library_type,
@@ -1242,8 +1230,7 @@ class Zotero(object):
                 u=self.library_id,
                 c=ident)
         headers = {'If-Unmodified-Since-Version': modified}
-        headers.update(self.default_headers)
-        r = requests.delete(
+        r = self.delete(
             url=url,
             params=params,
             headers=headers
@@ -1276,8 +1263,7 @@ class Zotero(object):
                 u=self.library_id,
                 c=ident)
         headers = {'If-Unmodified-Since-Version': modified}
-        headers.update(self.default_headers)
-        r = requests.delete(
+        r = self.delete(
             url=url,
             params=params,
             headers=headers)

@@ -170,11 +170,9 @@ class Zotero(object):
         else:
             raise ze.MissingCredentials(
                 'Please provide both the library ID and the library type')
-        # api_key is not required for public individual or group libraries
-        # TODO: However, it should be defined, otherwise you might get
-        # AttributeErrors when asking for self.api_key...
-        if api_key:
-            self.api_key = api_key
+        # api_key is not required for public user or group libraries
+        # However, it should be defined, otherwise it'll raise AttributeErrors...
+        self.api_key = api_key or ''
         self.preserve_json_order = preserve_json_order
         self.url_params = None
         self.tag_data = False
@@ -216,7 +214,7 @@ class Zotero(object):
             'image/tiff',
             'application/postscript',
             'application/rtf']
-        logger.debug("Zotero client initialized with library_type/library_id: \%s/%s and API key length: %s",
+        logger.debug("Zotero client initialized with library_type/library_id: %s/%s and API key length: %s",
                      library_type, library_id, len(api_key) if api_key else api_key)
 
     @property
@@ -226,20 +224,19 @@ class Zotero(object):
         """
         return {
             "User-Agent": "Pyzotero/%s" % __version__,
-            "Authorization": "Bearer %s" % self.api_key,
+            "Authorization": "Bearer %s" % self.api_key, # TODO: What if api_key is None?
             "Zotero-API-Version": "%s" % __api_version__,
             }
 
 
     def request(self, method, url, headers=None, **kwargs):
         """ Make requests.request to url using method injecting default headers, etc. """
-        if headers is None:
-            headers = self.default_headers
-        else:
-            headers.update(self.default_headers)
+        zot_headers = self.default_headers.copy()
+        if headers is not None:
+            zot_headers.update(headers)
         logger.debug("Making %s request to %s using headers %s",
-                     method, url, headers.keys())
-        response = self.session.request(method, url, **kwargs)
+                     method, url, zot_headers.keys())
+        response = self.session.request(method, url, headers=zot_headers, **kwargs)
         logger.debug("%s from url %s with %s bytes", response, url, len(response.content))
         return response
 
@@ -722,7 +719,7 @@ class Zotero(object):
                     raise ze.FileDoesNotExist(
                         "The file at %s couldn't be opened or found." %
                         templt[u'filename'])
-            logger.info("Payload/files %s verified.")
+            logger.info("Payload/files %s verified.", files)
 
         def create_prelim(payload, parentid=None):
             """
@@ -746,7 +743,7 @@ class Zotero(object):
                             json=payload,
                             headers=headers)
             if not r.ok:
-                error_handler(res)
+                error_handler(r)
             logger.info("%s from new (attachment) items request with data %s.", r, payload)
             data = r.json()
             return data
@@ -776,7 +773,7 @@ class Zotero(object):
                         reg_key, data)
             auth_res = self.post(
                 url=self.endpoint
-                + '/users/{u}/items/{i}/file'.format(
+                + '/users/{u}/items/{i}/file'.format( # TODO: Why is this /users/ and not /{t}/ ?
                     u=self.library_id,
                     i=reg_key),
                 data=data,
@@ -801,17 +798,20 @@ class Zotero(object):
             filebytes = open(attach, 'rb').read()
             upload_file.extend(filebytes)
             upload_file.extend(authdata['suffix'].encode())
+            # You can also just make a ByteIO object with the content...?
             # Requests chokes on bytearrays, so convert to str.
             # TODO: Check that this is still true for requests.
             # (And that this is in fact the correct way to upload files with requests and Zotero API)
-            upload_dict = {
-                'file': (
-                    os.path.basename(attach),
-                    str(upload_file))}
+            # requests "files" argument is a dict/list with values
+            # (filename, file-pointer, file-type, file-headers)
+            upload_dict = {'file': (os.path.basename(attach), upload_file)}
             logger.info("Uploading file %s to %s (%s bytes)",
                         attach, authdata['url'], len(upload_file))
             # TODO: Check that this can be done by self.post, i.e. with default_headers?
-            upload = self.post(
+            # NOTE: The fileserver is NOT api.zotero.org, but zoterofilestorage.s3.amazonaws.com or similar.
+            # DO NOT ADD the DEFAULT zotero api HEADERS to this request.
+            # (This is also why attachment uploading is such a multi-step process...)
+            upload = self.session.post(
                 url=authdata['url'],
                 files=upload_dict,
                 headers={
@@ -843,7 +843,7 @@ class Zotero(object):
                     u=self.library_id,
                     i=reg_key),
                 data=reg_data,
-                headers=dict(reg_headers))
+                headers=reg_headers)
             if not upload_reg.ok:
                 error_handler(upload_reg)
             logger.info("%s from upload registration request of attachment item %s: %s",

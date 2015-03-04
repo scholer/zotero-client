@@ -15,6 +15,13 @@
 ##
 ##    You should have received a copy of the GNU General Public License
 
+# pylint: disable=C0103
+
+"""
+Testing module for pyzotero.awsfile
+
+"""
+
 TEST_BYTES = bytes(i for i in range(2**8))
 HEAD = b"HEAD"
 TAIL = b"TAIL"
@@ -31,7 +38,7 @@ def test_awsfile_output():
     """
     Make sure that AWSfile produces the correct output.
     """
-    fileno, filepath = tempfile.mkstemp()
+    _, filepath = tempfile.mkstemp()
     #print("fd:", fd, type(fd))
     with open(filepath, 'wb') as fd:
         fd.write(TEST_BYTES)

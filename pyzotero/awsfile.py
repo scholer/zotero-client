@@ -59,6 +59,7 @@ class AWSfile(object):
             self.make()
 
     def make(self):
+        """ Make self._bytearray, with head, file content and tail. """
         l = [len(self._head),
              getsize(self._filepath), # Careful: If this is wrong size, it fails silently.
              len(self._tail)]
@@ -70,6 +71,11 @@ class AWSfile(object):
         mv[sum(l[:2]):sum(l[:3])] = self._tail
 
     def read(self):
+        """
+        Returns self._bytearray. This is called by requests when preparing
+        requests with files argument where the file-pointer is not str/bytes/bytearray.
+        (support for bytearray was added to requests on 3/3/2015)
+        """
         if self._bytearray is None:
             self.make()
         return self._bytearray

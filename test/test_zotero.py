@@ -25,7 +25,12 @@ import os
 import unittest
 import httpretty
 from httpretty import HTTPretty
-from pyzotero.pyzotero import zotero as z
+# Usually, either (a) tests are run from the project root,
+# or (b) the project root is added to the python path.
+# This means that
+# (1) the project root does not contain any __init__.py
+# (2) the module directory is loaded with:
+from pyzotero import zotero as z
 from dateutil import parser
 
 # Python 3 compatibility faffing
@@ -361,6 +366,7 @@ class ZoteroTests(unittest.TestCase):
         HTTPretty.register_uri(
             HTTPretty.GET,
             'https://api.zotero.org/itemTypes',
+            content_type='application/json',
             body=self.item_types)
         t = zot.item_types()
         self.assertEqual(t[0]['itemType'], 'artwork')
@@ -426,6 +432,84 @@ class ZoteroTests(unittest.TestCase):
         # now let's test something
         resp = zot.create_items([template])
         self.assertEqual('ABC123', resp['success']['0'])
+
+    @httpretty.activate
+    def testAttachment(self):
+        """
+        Tests upload of new (non-existing) attachment.
+        https://www.zotero.org/support/dev/web_api/v3/file_upload
+        """
+        zot = z.Zotero('myuserID', 'user', 'myuserkey')
+        import tempfile
+        fd, fn = tempfile.mkstemp()
+
+        # Mock template request response
+        att_template = """
+{
+    "itemType": "attachment",
+    "linkMode": "imported_file",
+    "title": "",
+    "accessDate": "",
+    "note": "",
+    "tags": [],
+    "contentType": "",
+    "charset": "",
+    "filename": "",
+    "md5": null,
+    "mtime": null
+}"""
+        HTTPretty.register_uri(
+            HTTPretty.GET,
+            'https://api.zotero.org/items/new?itemType=attachment&linkMode=imported_file',
+            body=att_template,
+            content_type='application/json',
+            status=200)
+
+        # Mock item creation (prelim) request response
+        HTTPretty.register_uri(
+            HTTPretty.POST,
+            'https://api.zotero.org/users/myuserID/items',
+            body=self.creation_doc, # 0: "ABC123"
+            content_type='application/json',
+            status=200)
+        #
+        # Mock upload auth request response:
+        # (Auth request has qline formatted body, by the way...)
+        auth_body = """{
+  "url": "https://zoterofilestorage.s3.amazonaws.com/",
+  "contentType": "multipart\/form-data; boundary=---------------------------f26db7247a034d450ede4b6e15902d82",
+  "prefix": "-----------------------------f26db7247a034d450ede4b6e1590(...)",
+  "suffix": "\\n-----------------------------f26db7247a034d450ede4b6e15902d82--",
+  "uploadKey": "bdfff1b6699765839adac4d74f2635f3"
+}"""
+        HTTPretty.register_uri(
+            HTTPretty.POST,
+            # /users/<userID>/items/<itemKey>/file
+            'https://api.zotero.org/users/myuserID/items/ABC123/file',
+            body=auth_body,
+            content_type='application/json',
+            status=200)
+
+        # Mock upload request response:
+        aws_response = """<?xml version="1.0" encoding="UTF-8"?>\n<PostResponse><Location>https://zoterofilestorage.s3.amazonaws.com/0f6a49dc177dbc85dfac438883eee492</Location><Bucket>zoterofilestorage</Bucket><Key>0f6a49dc177dbc85dfac438883eee492</Key><ETag>"0f6a49dc177dbc85dfac438883eee492"</ETag></PostResponse>"""
+        HTTPretty.register_uri(
+            HTTPretty.POST,
+            'https://zoterofilestorage.s3.amazonaws.com',
+            body=aws_response,
+            #content_type='application/json',
+            status=201)
+
+        # Register: Success returns 204 No Content.
+        HTTPretty.register_uri(
+            HTTPretty.POST,
+            'https://api.zotero.org/users/96236/items/D4RXSHNV/file',
+            body="",
+            #content_type='application/json',
+            status=204)
+        # Test:
+        resp = zot.attachment_simple([fn])
+        self.assertEqual('ABC123', resp['success']['0'])
+
 
     def testTooManyItems(self):
         """ Should fail because we're passing too many items

@@ -736,15 +736,16 @@ class Zotero(object):
             if parentid:
                 for child in payload:
                     child['parentItem'] = parentid
-            # This is a Response object, not a Request. So use r or res.
+            logger.info("Creating new attachment item with data: %s", payload)
+            # This is a Response object, not a Request. So use r, res or resp as variable name.
             r = self.post(url=self.endpoint
-                            + liblevel.format(t=self.library_type,
-                                              u=self.library_id,),
-                            json=payload,
-                            headers=headers)
+                          + liblevel.format(t=self.library_type,
+                                            u=self.library_id,),
+                          json=payload,
+                          headers=headers)
             if not r.ok:
                 error_handler(r)
-            logger.info("%s from new (attachment) items request with data %s.", r, payload)
+            logger.info("%s from new attachment item request with content: %s", r, r.content)
             data = r.json()
             return data
 
@@ -778,6 +779,7 @@ class Zotero(object):
                     i=reg_key),
                 data=data,
                 headers=auth_headers)
+            # Should return status code 200 if authorized (and 403, 409, 412, 413, 428, 429 if not).
             if not auth_res.ok:
                 error_handler(auth_res)
             logger.info("%s from file upload authorization request for item %s returned:\n%s",
@@ -791,35 +793,59 @@ class Zotero(object):
 
             reg_key isn't used, but we need to pass it through to Step 3
             """
-            upload_file = bytearray(authdata['prefix'].encode())
+            upload_file = bytearray(authdata['prefix'].encode('utf-8'))
             # Make sure to open in binary mode. Also, 'attach' is not strictly defined here,
             # but inferred implicitly.
             # TODO: Make attach variable explicit.
             filebytes = open(attach, 'rb').read()
             upload_file.extend(filebytes)
-            upload_file.extend(authdata['suffix'].encode())
+            upload_file.extend(authdata['suffix'].encode('utf-8'))
+            upload_file = bytes(upload_file)
+            # Alternatively:
+            #upload_file = b"".join((authdata['prefix'].encode('utf-8'),
+            #                        open(attach, 'rb').read(),
+            #                        authdata['suffix'].encode('utf-8')))
             # You can also just make a ByteIO object with the content...?
             # Requests chokes on bytearrays, so convert to str.
-            # TODO: Check that this is still true for requests.
-            # (And that this is in fact the correct way to upload files with requests and Zotero API)
+            # DONE: Checked that this is still true for requests.
+            # - Yes, must be bytes or string, not bytearray.
+            #   (Although that is a simple implementation detail that could easily change.)
+            # - Edit: As of March 3rd 2015, requests no longer chokes on bytearrays,
+            #   github.com/kennethreitz/requests/commit/61f4faae704e6b07ac70c9c26d97c5023156edf6
+
+            # How many copies of the file data are created?
+            # 1) filebytes = open(...)
+            # 2) upload_file.extend(filebytes)
+            # 3) upload_file = bytes(...)   # or str
+            # 4) fp = BytesIO(fp)           # in requests
+            # 5) data = fp.read()           # in requests, creating RequestField in RequestEncodingMixin.__encode_files
+            # 6) body.write(data)           # in requests, creating body with encode_multipart_formdata
+
+            # Note: It might be more memory efficient to use a BytesIO object.
+            # or even use the buffer protocol (supported by BytesIO.getbuffer())
+            # http://eli.thegreenplace.net/2011/11/28/less-copies-in-python-with-the-buffer-protocol-and-memoryviews
+            # For instance:
+            #file_data = BytesIO()
+
             # requests "files" argument is a dict/list with values
             # (filename, file-pointer, file-type, file-headers)
             upload_dict = {'file': (os.path.basename(attach), upload_file)}
-            logger.info("Uploading file %s to %s (%s bytes)",
-                        attach, authdata['url'], len(upload_file))
+            logger.info("Uploading file %s to %s (%s bytes), upload_dict has keys: %s",
+                        attach, authdata['url'], len(upload_file), upload_dict.keys())
             # TODO: Check that this can be done by self.post, i.e. with default_headers?
             # NOTE: The fileserver is NOT api.zotero.org, but zoterofilestorage.s3.amazonaws.com or similar.
             # DO NOT ADD the DEFAULT zotero api HEADERS to this request.
             # (This is also why attachment uploading is such a multi-step process...)
-            upload = self.session.post(
+            # This fails if using self.session, not sure why...
+            upload = requests.post(
                 url=authdata['url'],
                 files=upload_dict,
                 headers={
                     "Content-Type": authdata['contentType'],
                     'User-Agent': 'Pyzotero/%s' % __version__})
+            # status code should be 201 [Created]
             if not upload.ok:
                 error_handler(upload)
-            # now check the responses
             logger.info("%s from file upload request to %s of file %s: %s",
                         upload, authdata['url'], attach, upload.content)
             return register_upload(authdata, reg_key)
@@ -836,7 +862,8 @@ class Zotero(object):
             reg_data = {
                 'upload': authdata.get('uploadKey')
             }
-            logger.info("Registering upload of item %s with authdata %s", reg_key, authdata)
+            logger.info("Registering upload of item %s with authdata url %s and uploadkey %s",
+                        reg_key, authdata['url'], authdata['uploadKey'])
             upload_reg = self.post(
                 url=self.endpoint
                 + '/users/{u}/items/{i}/file'.format(
@@ -844,6 +871,7 @@ class Zotero(object):
                     i=reg_key),
                 data=reg_data,
                 headers=reg_headers)
+            # Response status code should be 204 [No content]
             if not upload_reg.ok:
                 error_handler(upload_reg)
             logger.info("%s from upload registration request of attachment item %s: %s",
@@ -1034,6 +1062,7 @@ class Zotero(object):
             'Zotero-Write-Token': token(),
             'Content-Type': 'application/json',
         }
+        logger.debug("Creating items using data: %s", cleaned)
         r = self.post(
             url=self.endpoint
             + '/{t}/{u}/items'.format(
@@ -1041,6 +1070,7 @@ class Zotero(object):
                 u=self.library_id),
             json=cleaned,
             headers=headers)
+        logger.info("%s from create items request with content: %s", r, r.content)
         if not r.ok:
             error_handler(r)
         return r.json()

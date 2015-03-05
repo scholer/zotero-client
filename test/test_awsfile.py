@@ -48,6 +48,20 @@ def test_awsfile_output():
     assert HEAD+filebytes+TAIL == bytes(awsbytearray)
 
 
+def test_awsfile_string():
+    """
+    Make sure that AWSfile produces the correct output.
+    """
+    _, filepath = tempfile.mkstemp()
+    head = "head"
+    tail = "tailæøå"
+    with open(filepath, 'wb') as fd:
+        fd.write(TEST_BYTES)
+    aws = awsfile.AWSfile(head, filepath, tail)
+    filebytes = open(filepath, 'rb').read()
+    awsbytearray = aws.read()
+    assert head.encode('utf-8')+filebytes+tail.encode('utf-8') == bytes(awsbytearray)
+
 
 
 if __name__ == '__main__':

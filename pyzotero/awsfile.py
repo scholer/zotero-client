@@ -52,8 +52,12 @@ class AWSfile(object):
 
         self._bytearray = None
         self._lens = None
+        if isinstance(head, str):
+            head = head.encode('utf-8')
         self._head = head
         self._filepath = filepath
+        if isinstance(tail, str):
+            tail = tail.encode('utf-8')
         self._tail = tail
         if not delayed:
             self.make()

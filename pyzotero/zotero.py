@@ -63,6 +63,7 @@ except ImportError:
     from ordereddict import OrderedDict
 
 from . import zotero_errors as ze
+from .awsfile import AWSfile
 
 
 # Avoid hanging the application if there's no server response
@@ -458,7 +459,8 @@ class Zotero(object):
 
     @retrieve
     def item(self, item, **kwargs):
-        """ Get a specific item
+        """ Get a specific item.
+        Arg <item> is the item ID.
         """
         query_string = '/{t}/{u}/items/{i}'.format(
             u=self.library_id,
@@ -468,7 +470,8 @@ class Zotero(object):
 
     @retrieve
     def file(self, item, **kwargs):
-        """ Get the file from an specific item
+        """ Get the file from an specific item.
+        Arg <item> is the item ID.
         """
         query_string = '/{t}/{u}/items/{i}/file'.format(
             u=self.library_id,
@@ -478,7 +481,8 @@ class Zotero(object):
 
     @retrieve
     def children(self, item, **kwargs):
-        """ Get a specific item's child items
+        """ Get a specific item's child items.
+        Arg <item> is the item ID.
         """
         query_string = '/{t}/{u}/items/{i}/children'.format(
             u=self.library_id,
@@ -488,7 +492,8 @@ class Zotero(object):
 
     @retrieve
     def collection_items(self, collection, **kwargs):
-        """ Get a specific collection's items
+        """ Get a specific collection's items.
+        Arg <collection> is the collection ID.
         """
         query_string = '/{t}/{u}/collections/{c}/items'.format(
             u=self.library_id,
@@ -498,7 +503,8 @@ class Zotero(object):
 
     @retrieve
     def collection(self, collection, **kwargs):
-        """ Get user collection
+        """ Get user collection.
+        Arg <collection> is the collection ID.
         """
         query_string = '/{t}/{u}/collections/{c}'.format(
             u=self.library_id,
@@ -508,14 +514,15 @@ class Zotero(object):
 
     @retrieve
     def collections(self, **kwargs):
-        """ Get user collections
+        """ Get user collections (all of them).
         """
         query_string = '/{t}/{u}/collections'
         return self._build_query(query_string)
 
     @retrieve
     def collections_sub(self, collection, **kwargs):
-        """ Get subcollections for a specific collection
+        """ Get subcollections for a specific collection.
+        Arg <collection> is the collection ID.
         """
         query_string = '/{t}/{u}/collections/{c}/collections'.format(
             u=self.library_id,
@@ -525,7 +532,7 @@ class Zotero(object):
 
     @retrieve
     def groups(self, **kwargs):
-        """ Get user groups
+        """ Get user groups (all of them).
         """
         query_string = '/users/{u}/groups'
         return self._build_query(query_string)
@@ -540,7 +547,8 @@ class Zotero(object):
 
     @retrieve
     def item_tags(self, item, **kwargs):
-        """ Get tags for a specific item
+        """ Get tags for a specific item.
+        Arg <item> is the item ID.
         """
         query_string = '/{t}/{u}/items/{i}/tags'.format(
             u=self.library_id,
@@ -745,8 +753,8 @@ class Zotero(object):
                           headers=headers)
             if not r.ok:
                 error_handler(r)
-            logger.info("%s from new attachment item request with content: %s", r, r.content)
             data = r.json()
+            logger.info("%s from new attachment item request with data: %s", r, data)
             return data
 
         def get_auth(attachment, reg_key):
@@ -793,50 +801,15 @@ class Zotero(object):
 
             reg_key isn't used, but we need to pass it through to Step 3
             """
-            upload_file = bytearray(authdata['prefix'].encode('utf-8'))
-            # Make sure to open in binary mode. Also, 'attach' is not strictly defined here,
-            # but inferred implicitly.
-            # TODO: Make attach variable explicit.
-            filebytes = open(attach, 'rb').read()
-            upload_file.extend(filebytes)
-            upload_file.extend(authdata['suffix'].encode('utf-8'))
-            upload_file = bytes(upload_file)
-            # Alternatively:
-            #upload_file = b"".join((authdata['prefix'].encode('utf-8'),
-            #                        open(attach, 'rb').read(),
-            #                        authdata['suffix'].encode('utf-8')))
-            # You can also just make a ByteIO object with the content...?
-            # Requests chokes on bytearrays, so convert to str.
-            # DONE: Checked that this is still true for requests.
-            # - Yes, must be bytes or string, not bytearray.
-            #   (Although that is a simple implementation detail that could easily change.)
-            # - Edit: As of March 3rd 2015, requests no longer chokes on bytearrays,
-            #   github.com/kennethreitz/requests/commit/61f4faae704e6b07ac70c9c26d97c5023156edf6
-
-            # How many copies of the file data are created?
-            # 1) filebytes = open(...)
-            # 2) upload_file.extend(filebytes)
-            # 3) upload_file = bytes(...)   # or str
-            # 4) fp = BytesIO(fp)           # in requests
-            # 5) data = fp.read()           # in requests, creating RequestField in RequestEncodingMixin.__encode_files
-            # 6) body.write(data)           # in requests, creating body with encode_multipart_formdata
-
-            # Note: It might be more memory efficient to use a BytesIO object.
-            # or even use the buffer protocol (supported by BytesIO.getbuffer())
-            # http://eli.thegreenplace.net/2011/11/28/less-copies-in-python-with-the-buffer-protocol-and-memoryviews
-            # For instance:
-            #file_data = BytesIO()
-
+            upload_file = AWSfile(authdata['prefix'], attach, authdata['suffix'])
             # requests "files" argument is a dict/list with values
             # (filename, file-pointer, file-type, file-headers)
             upload_dict = {'file': (os.path.basename(attach), upload_file)}
-            logger.info("Uploading file %s to %s (%s bytes), upload_dict has keys: %s",
-                        attach, authdata['url'], len(upload_file), upload_dict.keys())
-            # TODO: Check that this can be done by self.post, i.e. with default_headers?
-            # NOTE: The fileserver is NOT api.zotero.org, but zoterofilestorage.s3.amazonaws.com or similar.
-            # DO NOT ADD the DEFAULT zotero api HEADERS to this request.
+            logger.info("Uploading file %s to %s, upload_dict has keys: %s",
+                        attach, authdata['url'], upload_dict.keys())
+            # NOTE: The fileserver is NOT api.zotero.org, but zoterofilestorage.s3.amazonaws.com
             # (This is also why attachment uploading is such a multi-step process...)
-            # This fails if using self.session, not sure why...
+            # DO NOT ADD the DEFAULT zotero api HEADERS to this request.
             upload = requests.post(
                 url=authdata['url'],
                 files=upload_dict,
@@ -888,6 +861,11 @@ class Zotero(object):
         #   uploadfile(authdata, reg_key)
         #    -- Uploads file content with post to url in authdata.
         #    -- Calls register_upload(authdata, reg_key)
+        # TODO: create_prelim sometimes fail, seemingly randomly.
+        # That is, I can call zot.attachment_simple([file], parentid) and have it fail with json response:
+        # {'failed': {'0': {'message': 'An error occurred', 'code': 500}}, 'unchanged': {}, 'success': {}}
+        # Then I can run attachment_simple again afterwards, and it will succeed.
+        # Maybe it is a timing/caching issue, i.e. the newly created parent has not been fully registered?
         created = create_prelim(payload, parentid)
         logger.info("Preliminary attachment item created: %s", created)
         registered_idx = [int(k) for k in created['success'].keys()]

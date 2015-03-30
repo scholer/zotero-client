@@ -43,7 +43,6 @@ except ImportError:
 import socket
 import feedparser
 import json
-from json import dumps as json_dumps
 import copy
 import uuid
 import time
@@ -242,23 +241,7 @@ class Zotero(object):
             zot_headers.update(headers)
         logger.debug("Making %s request to %s using headers %s",
                      method, url, zot_headers.keys())
-        try:
-            ## THIS TRY-EXCEPT IS JUST TO AVOID ERRORS WITH OLD requests LIBRARIES (before 2.4.2, Oct 2014).
-            response = self.session.request(method, url, headers=zot_headers, **kwargs)
-        except TypeError as e:
-            msg = "\"%s: %s\" while making request. " % (type(e), e) \
-                  + "This could be caused by old requests " \
-                  + "library (from before July 2014). " \
-                  + "Please consider updating your version of requests."
-            logger.warning(msg)
-            print("\nWARNING:", msg)
-            if json in kwargs and kwargs['json'] is not None:
-                if kwargs.get('data') is not None:
-                    msg = "data and json args were both provided; these are mutually exclusive."
-                    logger.warning(msg)
-                    print("\nWARNING:", msg)
-                data = json_dumps(json)
-
+        response = self.session.request(method, url, headers=zot_headers, **kwargs)
         logger.debug("%s from url %s with %s bytes", response, url, len(response.content))
         return response
 

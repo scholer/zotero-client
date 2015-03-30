@@ -40,10 +40,10 @@ except ImportError:
     from urllib.parse import urlparse
     from urllib.parse import quote
 
-import requests
 import socket
 import feedparser
 import json
+from json import dumps as json_dumps
 import copy
 import uuid
 import time
@@ -55,6 +55,11 @@ import pytz
 import mimetypes
 import logging
 logger = logging.getLogger(__name__)
+import requests
+if requests.__version__ < "2.4.2":
+    print("\n\n\n   WARNING: OLD requsts LIBRARY (%s)!\n" % requests.__version__)
+    print("   Please UPDATE to requests version >= 2.4.2 !!\n\n\n")
+    time.sleep(2)
 
 
 try:
@@ -237,7 +242,23 @@ class Zotero(object):
             zot_headers.update(headers)
         logger.debug("Making %s request to %s using headers %s",
                      method, url, zot_headers.keys())
-        response = self.session.request(method, url, headers=zot_headers, **kwargs)
+        try:
+            ## THIS TRY-EXCEPT IS JUST TO AVOID ERRORS WITH OLD requests LIBRARIES (before 2.4.2, Oct 2014).
+            response = self.session.request(method, url, headers=zot_headers, **kwargs)
+        except TypeError as e:
+            msg = "\"%s: %s\" while making request. " % (type(e), e) \
+                  + "This could be caused by old requests " \
+                  + "library (from before July 2014). " \
+                  + "Please consider updating your version of requests."
+            logger.warning(msg)
+            print("\nWARNING:", msg)
+            if json in kwargs and kwargs['json'] is not None:
+                if kwargs.get('data') is not None:
+                    msg = "data and json args were both provided; these are mutually exclusive."
+                    logger.warning(msg)
+                    print("\nWARNING:", msg)
+                data = json_dumps(json)
+
         logger.debug("%s from url %s with %s bytes", response, url, len(response.content))
         return response
 
@@ -248,6 +269,7 @@ class Zotero(object):
 
     def post(self, url, data=None, json=None, headers=None, **kwargs): # pylint: disable=W0621
         """ Convenience method to request post method. """
+        ## OBS: The json keyword argument was not added to requests until August 2014, commit 8f1774, release 2.4.2
         return self.request('post', url, headers=headers, data=data, json=json, **kwargs)
 
     def put(self, url, data=None, headers=None, **kwargs):
